@@ -41,7 +41,8 @@ and check correct pins for keypad
 
 ## Usage
 
-On first start, press any number from **1** to **9** to select the player. Afterwards enter your initiative with the number keys **0** - **9**, for example press **5** and **4** for an initiative of *54*. To send the initiative to GHS, press the **#** key. If you're unsure of a type, press **\*** to reset the input. To reset the player number press **\*** 3x in a row.
+On first start, press any number from **1** to **9** to select the player. Afterwards enter your initiative with the number keys **0** - **9**, for example press **5** + **4** for an initiative of *54*. Use **0** + **0** to declare a long rest. To send the initiative to GHS, press the **#** key. If you're unsure of a type, press **\*** to reset the input. To reset the player number press **\*** 3x in a row.
+
 A single LED indicates the current status:
 - blinking in 1s interval: Enter the player number with the keypad
 - LED not blinking: Enter Initiative
