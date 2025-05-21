@@ -31,7 +31,7 @@
 */
 #define HOST "gloomhaven-secretariat.de"
 #define PORT 8443
-#define URL "/server/game/initiative"
+#define URL "/game/initiative"
 #define GAME_CODE ""
 
 /*
