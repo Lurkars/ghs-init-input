@@ -31,8 +31,12 @@
 */
 #define HOST "gloomhaven-secretariat.de"
 #define PORT 8443
-#define URL "/game/initiative"
+#define URL "/game/command"
 #define GAME_CODE ""
+/*
+ Comment TLS out to not use secure connection
+ */
+#define TLS true
 
 /*
  Set WiFi

@@ -3,8 +3,8 @@
 #include <HTTPClient.h>
 #include <Keypad.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 #include <WiFiMulti.h>
+#include <ArduinoJson.h>
 
 #include "driver/rtc_io.h"
 
@@ -38,7 +38,14 @@ long resetMillis = 0;
 int ledState = LOW;
 
 WiFiMulti wifiMulti;
+
+#if defined(TLS)
+#include <WiFiClientSecure.h>
 WiFiClientSecure client;
+#else
+#include <WiFiClient.h>
+WiFiClient client;
+#endif
 
 uint8_t setInitiative() {
   longRest = false;
@@ -58,27 +65,18 @@ uint8_t setInitiative() {
   return RESULT_OK;
 }
 
-uint8_t postInitiative() {
+uint8_t postCommand(JsonDocument command) {
+  String commandJson;
+  serializeJson(command, commandJson);
+  int contentLength = commandJson.length();
+
   Serial.print("POST... ");
-
-  String jsonString = "{\"playerNumber\":";
-  jsonString += playerNumber;
-  jsonString += ",\"initiative\":";
-  jsonString += initiative;
-  if (longRest) {
-    jsonString += ",\"longRest\":true";
-  }
-  jsonString += "}";
-
-  Serial.println(jsonString);
-
-  int contentLength = jsonString.length();
+  Serial.println(commandJson);
 
   if (!client.connect(HOST, PORT)) {
     Serial.println("CONNECTION FAILED!");
     return RESULT_ERROR;
   }
-
   client.print("POST ");
   client.print(URL);
   client.println(" HTTP/1.1");
@@ -98,7 +96,7 @@ uint8_t postInitiative() {
 
   int cIndex;
   for (cIndex = 0; cIndex < contentLength; cIndex = cIndex + 1000) {
-    client.print(jsonString.substring(cIndex, cIndex + 1000));
+    client.print(commandJson.substring(cIndex, cIndex + 1000));
   }
 
   char status[32] = {0};
@@ -125,6 +123,17 @@ uint8_t postInitiative() {
   client.stop();
   Serial.println("Success!");
   return RESULT_OK;
+}
+
+uint8_t postInitiative() {
+  JsonDocument initiativeCommand;
+  initiativeCommand["id"] = "character.initiative";
+  initiativeCommand["parameters"][0] = playerNumber;
+  initiativeCommand["parameters"][1] = initiative;
+  if (longRest) {
+    initiativeCommand["parameters"][2] = true;
+  }
+  return postCommand(initiativeCommand);
 }
 
 void blinkLED() {
@@ -204,9 +213,11 @@ void setup() {
     ledState = WIFI_INTERVAL;
   }
 
+#if defined(TLS)
   client.setInsecure();  // in general this is bad, but GHS data is not
                          // important and this will prevent issues with local
                          // SSL server
+#endif
   client.setTimeout(5000);
 
 #ifdef EEPROM_SIZE
