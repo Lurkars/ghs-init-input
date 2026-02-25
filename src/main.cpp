@@ -100,15 +100,21 @@ uint8_t postCommand(JsonDocument command) {
   }
 
   char status[32] = {0};
-  client.readBytesUntil('\r', status, sizeof(status));
+  int bytesRead = client.readBytesUntil('\r', status, sizeof(status) - 1);
 
-  int statusCode = 0;
-  statusCode += (status[9] - '0') * 100;
-  statusCode += (status[10] - '0') * 10;
-  statusCode += (status[11] - '0');
+  if (bytesRead < 12 || !isdigit(status[9]) || !isdigit(status[10]) || !isdigit(status[11])) {
+    Serial.print(F("Invalid HTTP response (bytes read: "));
+    Serial.print(bytesRead);
+    Serial.print(F("): "));
+    Serial.println(status);
+    client.stop();
+    return RESULT_ERROR;
+  }
+
+  int statusCode = (status[9] - '0') * 100 + (status[10] - '0') * 10 + (status[11] - '0');
 
   if (statusCode != 200) {
-    Serial.print(F("Invalid Status Code:"));
+    Serial.print(F("Invalid Status Code: "));
     Serial.println(statusCode);
     client.stop();
     return RESULT_ERROR;
