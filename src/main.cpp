@@ -1,10 +1,10 @@
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <EEPROM.h>
 #include <HTTPClient.h>
 #include <Keypad.h>
 #include <WiFi.h>
 #include <WiFiMulti.h>
-#include <ArduinoJson.h>
 
 #include "driver/rtc_io.h"
 
@@ -14,21 +14,51 @@
 #define RESULT_OK 0
 #define RESULT_ERROR 1
 
+#ifndef COLUMNS
+#define COLUMNS 3
+#endif
+
 const byte rows = 4;
-const byte cols = 3;
-char keys[rows][cols] = {
+const byte cols = COLUMNS;
+
+#if COLUMNS == 4
+char keys[4][4] = {{'1', '2', '3', 'A'},
+                   {'4', '5', '6', 'B'},
+                   {'7', '8', '9', 'C'},
+                   {'*', '0', '#', 'D'}};
+#else
+char keys[4][3] = {
     {'1', '2', '3'}, {'4', '5', '6'}, {'7', '8', '9'}, {'*', '0', '#'}};
+#endif
 
 byte rowPins[rows] = ROW_PINS;
 byte colPins[cols] = COL_PINS;
 
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, rows, cols);
 
-int initiative = -1;
+// ============================================================
+// Input mode: A = Initiative (default)
+// ============================================================
+char currentMode = 'A';
+
+// Mode A: Initiative
 bool longRest = false;
-int lastInitiative = -1;
 bool lastLongRest = false;
 
+// Mode B: Hit points, Expernience, Loot
+int bModeValue = 0;
+int hpValue = 0;
+int xpValue = 0;
+int lootValue = 0;
+
+// Mode C: Conditions
+bool conditionSubmitted = false;
+
+// Mode D: Identities, WIP
+
+// Persistent values
+int value = -1;
+int lastValue = -1;
 int playerNumber = 0;
 int resetCount = 0;
 
@@ -47,18 +77,22 @@ WiFiClientSecure client;
 WiFiClient client;
 #endif
 
+// ============================================================
+// Mode A: Initiative
+// ============================================================
+
 uint8_t setInitiative() {
   longRest = false;
-  if (initiative < 0) {
-    initiative = 0;
+  if (value < 0) {
+    value = 0;
   }
 
-  if (initiative > 99) {
-    initiative = 99;
+  if (value > 99) {
+    value = 99;
     longRest = true;
   }
 
-  if (initiative == lastInitiative && longRest == lastLongRest) {
+  if (value == lastValue && longRest == lastLongRest) {
     return RESULT_ERROR;
   }
 
@@ -102,7 +136,8 @@ uint8_t postCommand(JsonDocument command) {
   char status[32] = {0};
   int bytesRead = client.readBytesUntil('\r', status, sizeof(status) - 1);
 
-  if (bytesRead < 12 || !isdigit(status[9]) || !isdigit(status[10]) || !isdigit(status[11])) {
+  if (bytesRead < 12 || !isdigit(status[9]) || !isdigit(status[10]) ||
+      !isdigit(status[11])) {
     Serial.print(F("Invalid HTTP response (bytes read: "));
     Serial.print(bytesRead);
     Serial.print(F("): "));
@@ -111,7 +146,8 @@ uint8_t postCommand(JsonDocument command) {
     return RESULT_ERROR;
   }
 
-  int statusCode = (status[9] - '0') * 100 + (status[10] - '0') * 10 + (status[11] - '0');
+  int statusCode =
+      (status[9] - '0') * 100 + (status[10] - '0') * 10 + (status[11] - '0');
 
   if (statusCode != 200) {
     Serial.print(F("Invalid Status Code: "));
@@ -135,11 +171,312 @@ uint8_t postInitiative() {
   JsonDocument initiativeCommand;
   initiativeCommand["id"] = "character.initiative";
   initiativeCommand["parameters"][0] = playerNumber;
-  initiativeCommand["parameters"][1] = initiative;
+  initiativeCommand["parameters"][1] = value;
   if (longRest) {
     initiativeCommand["parameters"][2] = true;
   }
   return postCommand(initiativeCommand);
+}
+
+void modeA_onClear() { value = -1; }
+
+void modeA_onDigit(uint8_t digit) {
+  if (value == 0 && digit == 0) {
+    value = 100;
+  } else if (value < 1 || value > 9) {
+    value = digit;
+  } else {
+    value = value * 10;
+    value += digit;
+  }
+}
+
+void modeA_onSubmit() {
+  if (setInitiative() != RESULT_OK) {
+    Serial.println("Initiative unchanged or invalid");
+    ledInterval = ERROR_INTERVAL;
+    resetMillis = millis() + 3000;
+    value = -1;
+    longRest = false;
+    lastValue = value;
+    lastLongRest = longRest;
+
+#ifdef EEPROM_SIZE
+    EEPROM.write(EEPROM_ADDRESS_LAST_VALUE, lastValue);
+    EEPROM.write(EEPROM_ADDRESS_LAST_LONG_REST, lastLongRest);
+    EEPROM.commit();
+#endif
+    return;
+  }
+
+  if (postInitiative() != RESULT_OK) {
+    Serial.println("Post initiative failed");
+    ledInterval = ERROR_INTERVAL;
+    value = -1;
+    longRest = false;
+    lastValue = value;
+    lastLongRest = longRest;
+
+#ifdef EEPROM_SIZE
+    EEPROM.write(EEPROM_ADDRESS_LAST_VALUE, lastValue);
+    EEPROM.write(EEPROM_ADDRESS_LAST_LONG_REST, lastLongRest);
+    EEPROM.commit();
+#endif
+    return;
+  }
+
+  lastValue = value;
+  lastLongRest = longRest;
+  value = -1;
+  longRest = false;
+  ledInterval = NORMAL_INTERVAL;
+
+#ifdef EEPROM_SIZE
+  EEPROM.write(EEPROM_ADDRESS_LAST_VALUE, lastValue);
+  EEPROM.write(EEPROM_ADDRESS_LAST_LONG_REST, lastLongRest);
+  EEPROM.commit();
+#endif
+}
+
+// ============================================================
+// Mode B:  Hit points, Expernience, Loot
+// ============================================================
+
+uint8_t postHp() {
+  JsonDocument hpCommand;
+  hpCommand["id"] = "character.hp";
+  hpCommand["parameters"][0] = playerNumber;
+  hpCommand["parameters"][1] = hpValue;
+  return postCommand(hpCommand);
+}
+
+uint8_t postXp() {
+  JsonDocument xpCommand;
+  xpCommand["id"] = "character.xp";
+  xpCommand["parameters"][0] = playerNumber;
+  xpCommand["parameters"][1] = xpValue;
+  return postCommand(xpCommand);
+}
+
+uint8_t postLoot() {
+  JsonDocument lootCommand;
+  lootCommand["id"] = "character.loot";
+  lootCommand["parameters"][0] = playerNumber;
+  lootCommand["parameters"][1] = lootValue;
+  return postCommand(lootCommand);
+}
+
+uint8_t postLootDraw() {
+  JsonDocument lootDrawCommand;
+  lootDrawCommand["id"] = "character.loot.draw";
+  lootDrawCommand["parameters"][0] = playerNumber;
+  return postCommand(lootDrawCommand);
+}
+
+void modeB_onClear() {
+  bModeValue = 0;
+  hpValue = 0;
+  xpValue = 0;
+  lootValue = 0;
+}
+
+void modeB_onDigit(uint8_t digit) {
+  switch (digit) {
+    case 1:
+      bModeValue = 1;
+      hpValue--;
+      xpValue = 0;
+      lootValue = 0;
+      break;
+    case 2:
+      bModeValue = 1;
+      hpValue = 0;
+      xpValue = 0;
+      lootValue = 0;
+      break;
+    case 3:
+      bModeValue = 1;
+      hpValue++;
+      xpValue = 0;
+      lootValue = 0;
+      break;
+    case 4:
+      bModeValue = 2;
+      xpValue--;
+      hpValue = 0;
+      lootValue = 0;
+      break;
+    case 5:
+      bModeValue = 2;
+      xpValue = 0;
+      hpValue = 0;
+      lootValue = 0;
+      break;
+    case 6:
+      bModeValue = 2;
+      xpValue++;
+      hpValue = 0;
+      lootValue = 0;
+      break;
+    case 7:
+      bModeValue = 3;
+      lootValue--; 
+      hpValue = 0;
+      xpValue = 0; 
+      break;
+    case 8:
+      bModeValue = 3;
+      lootValue = 0;
+      hpValue = 0;
+      xpValue = 0;
+      break;
+    case 9:
+      bModeValue = 3;
+      lootValue++;
+      hpValue = 0;
+      xpValue = 0;
+      break;
+    case 0:
+      bModeValue = 4;
+      hpValue = 0;
+      xpValue = 0;
+      lootValue = 0;
+      break;
+  }
+}
+void modeB_onSubmit() {
+  if (bModeValue == 1 && hpValue != 0 && postHp() != RESULT_OK) {
+    Serial.println("Post HP failed");
+    ledInterval = ERROR_INTERVAL;
+    return;
+  } else if (bModeValue == 2 && xpValue != 0 && postXp() != RESULT_OK) {
+    Serial.println("Post XP failed");
+    ledInterval = ERROR_INTERVAL;
+    return;
+  } else if (bModeValue == 3 && lootValue != 0 &&
+             postLoot() != RESULT_OK) {
+    Serial.println("Post Loot failed");
+    ledInterval = ERROR_INTERVAL;
+    return;
+  } else if (bModeValue == 4 && postLootDraw() != RESULT_OK) {
+    Serial.println("Post Loot Draw failed");
+    ledInterval = ERROR_INTERVAL;
+    return;
+  }
+  modeB_onClear();
+}
+
+// ============================================================
+// Mode C: Conditions
+// ============================================================
+
+uint8_t postCondition() {
+  JsonDocument conditionCommand;
+  conditionCommand["id"] = "character.condition";
+  conditionCommand["parameters"][0] = playerNumber;
+  if (value == 0) {
+    conditionCommand["parameters"][1] = 9;
+  } else {
+    conditionCommand["parameters"][1] = value - 1;
+  }
+  return postCommand(conditionCommand);
+}
+
+void modeC_onClear() { value = -1; }
+
+void modeC_onDigit(uint8_t digit) {
+  if (value < 1 || value > 9 || conditionSubmitted) {
+    value = digit;
+  } else {
+    value = value * 10;
+    value += digit;
+  }
+  conditionSubmitted = false;
+}
+void modeC_onSubmit() {
+  if (postCondition() != RESULT_OK) {
+    Serial.println("Post Condition failed");
+    ledInterval = ERROR_INTERVAL;
+    return;
+  }
+  conditionSubmitted = true;
+}
+
+// ============================================================
+// Mode D: Identities, WIP
+// ============================================================
+
+uint8_t postIdentity(uint8_t value) {
+  JsonDocument identityCommand;
+  identityCommand["id"] = "character.identity";
+  identityCommand["parameters"][0] = playerNumber;
+  identityCommand["parameters"][1] = value - 1;
+  return postCommand(identityCommand);
+}
+
+void modeD_onClear() {}
+void modeD_onDigit(uint8_t digit) {
+  if (postIdentity(digit) != RESULT_OK) {
+    Serial.println("Post initiative failed");
+    ledInterval = ERROR_INTERVAL;
+    return;
+  }
+}
+void modeD_onSubmit() {}
+
+// ============================================================
+// Mode dispatch helpers
+// ============================================================
+
+void onClear() {
+  switch (currentMode) {
+    case 'B':
+      modeB_onClear();
+      break;
+    case 'C':
+      modeC_onClear();
+      break;
+    case 'D':
+      modeD_onClear();
+      break;
+    default:
+      modeA_onClear();
+      break;  // 'A' and 3-col keypads
+  }
+}
+
+void onDigit(uint8_t value) {
+  switch (currentMode) {
+    case 'B':
+      modeB_onDigit(value);
+      break;
+    case 'C':
+      modeC_onDigit(value);
+      break;
+    case 'D':
+      modeD_onDigit(value);
+      break;
+    default:
+      modeA_onDigit(value);
+      break;
+  }
+}
+
+void onSubmit() {
+  switch (currentMode) {
+    case 'B':
+      modeB_onSubmit();
+      break;
+    case 'C':
+      modeC_onSubmit();
+      break;
+    case 'D':
+      modeD_onSubmit();
+      break;
+    default:
+      modeA_onSubmit();
+      break;
+  }
 }
 
 void blinkLED() {
@@ -242,14 +579,14 @@ void setup() {
     resetMillis = millis() + playerNumber * PLAYER_INFO_INTERVAL * 2;
   }
 
-  lastInitiative = EEPROM.read(EEPROM_ADDRESS_LAST_INITIATIVE);
-  if (lastInitiative > 99) {
-    lastInitiative = -1;
-    EEPROM.write(EEPROM_ADDRESS_LAST_INITIATIVE, lastInitiative);
+  lastValue = EEPROM.read(EEPROM_ADDRESS_LAST_VALUE);
+  if (lastValue > 99) {
+    lastValue = -1;
+    EEPROM.write(EEPROM_ADDRESS_LAST_VALUE, lastValue);
     EEPROM.commit();
   }
-  Serial.print("Read lastInitiative: ");
-  Serial.println(lastInitiative);
+  Serial.print("Read lastValue: ");
+  Serial.println(lastValue);
 
   lastLongRest = EEPROM.read(EEPROM_ADDRESS_LAST_LONG_REST);
   if (lastLongRest != 0 && lastLongRest != 1) {
@@ -272,7 +609,7 @@ void loop() {
     Serial.print("Pressed: ");
     Serial.println(key);
     if (key == '*') {
-      initiative = -1;
+      onClear();
       if (playerNumber > 0 && resetCount < 3) {
         resetCount += 1;
       }
@@ -288,13 +625,13 @@ void loop() {
         Serial.println("Reset player");
         playerNumber = 0;
         resetCount = 0;
-        lastInitiative = -1;
+        lastValue = -1;
         lastLongRest = false;
         ledInterval = PLAYER_INTERVAL;
 
 #ifdef EEPROM_SIZE
         EEPROM.write(EEPROM_ADDRESS_PLAYER_NUMBER, playerNumber);
-        EEPROM.write(EEPROM_ADDRESS_LAST_INITIATIVE, lastInitiative);
+        EEPROM.write(EEPROM_ADDRESS_LAST_VALUE, lastValue);
         EEPROM.write(EEPROM_ADDRESS_LAST_LONG_REST, lastLongRest);
         EEPROM.commit();
 #endif
@@ -310,50 +647,21 @@ void loop() {
       if (playerNumber > 0) {
         ledState = HIGH;
         digitalWrite(LED_PIN, ledState);
-
-        if (setInitiative()) {
-          ledInterval = ERROR_INTERVAL;
-          resetMillis = millis() + 3000;
-          initiative = -1;
-          longRest = false;
-          lastInitiative = initiative;
-          lastLongRest = longRest;
-
-#ifdef EEPROM_SIZE
-          EEPROM.write(EEPROM_ADDRESS_LAST_INITIATIVE, lastInitiative);
-          EEPROM.write(EEPROM_ADDRESS_LAST_LONG_REST, lastLongRest);
-          EEPROM.commit();
-#endif
-        } else if (postInitiative()) {
-          ledInterval = ERROR_INTERVAL;
-          initiative = -1;
-          longRest = false;
-          lastInitiative = initiative;
-          lastLongRest = longRest;
-
-#ifdef EEPROM_SIZE
-          EEPROM.write(EEPROM_ADDRESS_LAST_INITIATIVE, lastInitiative);
-          EEPROM.write(EEPROM_ADDRESS_LAST_LONG_REST, lastLongRest);
-          EEPROM.commit();
-#endif
-        } else {
-          lastInitiative = initiative;
-          lastLongRest = longRest;
-          initiative = -1;
-          longRest = false;
-          ledInterval = NORMAL_INTERVAL;
-
-#ifdef EEPROM_SIZE
-          EEPROM.write(EEPROM_ADDRESS_LAST_INITIATIVE, lastInitiative);
-          EEPROM.write(EEPROM_ADDRESS_LAST_LONG_REST, lastLongRest);
-          EEPROM.commit();
-#endif
-        }
+        onSubmit();
       } else {
         ledInterval = FORCE_INTERVAL;
         resetMillis = millis() + 4000;
       }
+    } else if (key >= 'A' && key <= 'D') {
+      // Mode switch (4-column keypads only)
+      resetCount = 0;
+      ledInterval = NORMAL_INTERVAL;
+      onClear();  // reset previous mode input
+      currentMode = key;
+      Serial.print("Mode: ");
+      Serial.println(currentMode);
     } else {
+      // Digit input
       uint8_t value = key - '0';
       resetCount = 0;
       ledInterval = NORMAL_INTERVAL;
@@ -369,14 +677,7 @@ void loop() {
         Serial.print("Select player: ");
         Serial.println(playerNumber);
       } else {
-        if (initiative == 0 && value == 0) {
-          initiative = 100;
-        } else if (initiative < 1 || initiative > 9) {
-          initiative = value;
-        } else {
-          initiative = initiative * 10;
-          initiative += value;
-        }
+        onDigit(value);
       }
     }
   }
