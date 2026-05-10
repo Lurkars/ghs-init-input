@@ -320,9 +320,9 @@ void modeB_onDigit(uint8_t digit) {
       break;
     case 7:
       bModeValue = 3;
-      lootValue--; 
+      lootValue--;
       hpValue = 0;
-      xpValue = 0; 
+      xpValue = 0;
       break;
     case 8:
       bModeValue = 3;
@@ -353,8 +353,7 @@ void modeB_onSubmit() {
     Serial.println("Post XP failed");
     ledInterval = ERROR_INTERVAL;
     return;
-  } else if (bModeValue == 3 && lootValue != 0 &&
-             postLoot() != RESULT_OK) {
+  } else if (bModeValue == 3 && lootValue != 0 && postLoot() != RESULT_OK) {
     Serial.println("Post Loot failed");
     ledInterval = ERROR_INTERVAL;
     return;
@@ -479,6 +478,15 @@ void onSubmit() {
   }
 }
 
+void printBSSID(const uint8_t* bssid) {
+  for (int i = 0; i < 6; i++) {
+    if (i > 0) {
+      Serial.print(":");
+    }
+    Serial.print(bssid[i], HEX);  // Print each byte in HEX format
+  }
+}
+
 void blinkLED() {
   if (ledInterval > 0 && millis() - lastMillis > ledInterval) {
     lastMillis = millis();
@@ -501,6 +509,39 @@ void blinkLED() {
     if (playerNumber < 1) {
       ledInterval = PLAYER_INTERVAL;
     }
+  }
+}
+
+void wifiWait(bool multi) {
+  int counter = 0;
+  while (!multi && WiFi.status() != WL_CONNECTED ||
+         multi && wifiMulti.run() != WL_CONNECTED) {
+    digitalWrite(LED_PIN, LOW);
+    delay(500);
+    digitalWrite(LED_PIN, HIGH);
+    Serial.print(".");
+    counter += 1;
+    if (counter % 20 == 0) {
+      Serial.println();
+    }
+  }
+}
+
+void wifiConnected(bool multi, long startTime) {
+  if (!multi && WiFi.status() == WL_CONNECTED ||
+      multi && wifiMulti.run() == WL_CONNECTED) {
+    Serial.print("\nWi-Fi connected after ");
+    Serial.print((millis() - startTime) / 1000);
+    Serial.println("s");
+    Serial.print("\"");
+    Serial.print(WiFi.SSID());
+    Serial.print("\" BSSID: ");
+    printBSSID(WiFi.BSSID());
+    Serial.print("\" IP address: ");
+    Serial.println(WiFi.localIP());
+    Serial.println();
+  } else {
+    Serial.println("Wi-Fi not connected!");
   }
 }
 
@@ -530,27 +571,47 @@ void setup() {
   wifiMulti.addAP(WIFI_SSID3, WIFI_PSWD3);
 #endif
 
+  long startTime = millis();
   Serial.println("\nConnecting to Wifi");
   int counter = 0;
-  while (wifiMulti.run() != WL_CONNECTED && counter < 120) {
-    digitalWrite(LED_PIN, LOW);
-    delay(500);
-    digitalWrite(LED_PIN, HIGH);
-    Serial.print(".");
-    counter += 1;
-    if (counter % 20 == 0) {
-      Serial.println();
-    }
-  }
+  wifiWait(true);
   digitalWrite(LED_PIN, LOW);
 
   if (wifiMulti.run() == WL_CONNECTED) {
-    Serial.println("\nWi-Fi connected");
-    Serial.print("\"");
-    Serial.print(WiFi.SSID());
-    Serial.print("\" IP address: ");
-    Serial.println(WiFi.localIP());
-    Serial.println();
+    wifiConnected(true, startTime);
+
+#ifdef WIFI_BSSID
+    if (WiFi.SSID() == WIFI_SSID) {
+      uint8_t targetBSSID[] = WIFI_BSSID;
+      if (memcmp(WiFi.BSSID(), targetBSSID, 6) != 0) {
+        Serial.println(
+            "Connected to wrong BSSID for WIFI_SSID. Reconnecting...");
+        WiFi.disconnect();
+        delay(500);  // Wait for disconnect to complete
+        WiFi.begin(WIFI_SSID, WIFI_PSWD, 0, targetBSSID);
+        wifiWait(false);
+        wifiConnected(false, startTime);
+      } else {
+        Serial.println("Correct BSSID for WIFI_SSID connected!");
+      }
+    }
+#endif
+#ifdef WIFI_BSSID2
+    if (WiFi.SSID() == WIFI_SSID2) {
+      uint8_t targetBSSID[] = WIFI_BSSID;
+      if (memcmp(WiFi.BSSID(), targetBSSID, 6) != 0) {
+        Serial.println(
+            "Connected to wrong BSSID for WIFI_SSID2. Reconnecting...");
+        WiFi.disconnect();
+        delay(500);  // Wait for disconnect to complete
+        WiFi.begin(WIFI_SSID2, WIFI_PSWD2, 0, targetBSSID);
+        wifiWait(false);
+        wifiConnected(false, startTime);
+      } else {
+        Serial.println("Correct BSSID for WIFI_SSID2 connected!");
+      }
+    }
+#endif
   } else {
     Serial.println("\nCould not connect to Wi-Fi");
     ledState = WIFI_INTERVAL;
