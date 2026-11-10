@@ -96,7 +96,7 @@ Enter the condition number and press **#** to toggle that condition on the chara
 
 #### Mode D — Identity
 
-Press a digit key (**1**–**9**) to immediately switch the character to that identity slot — no **#** needed.
+Press a digit key (**1**–**9**, **0** for slot 10) to immediately switch the character to that identity slot — no **#** needed.
 
 ---
 
@@ -104,9 +104,5 @@ A single LED indicates the current status:
 - blinking in 1s interval: Enter the player number with the keypad
 - LED not blinking: Enter Initiative
 - LED blinking 500ms interval: Press **\*** again to reset player number
-- LED blinking 100ms interval:
-    - persistent: there is an error with server communication
-    - for a duration of 3s: there was an error to set the initative, possible that:
-        - the initiative is already the same value
-        - the round has already started and you're not able to set the initative anymore
+- LED blinking 100ms interval: there is an error with server communication
 
